@@ -272,6 +272,7 @@ void getLeastImportantSeam (int *in, int width, int height, int *out){
     if (in[i] < in[minCol])
       minCol = i;
   }
+  printf("min col %d-%d\n", minCol, in[minCol]);
 
   getSeamAt(in, width, height, out, minCol);
 }
@@ -378,6 +379,128 @@ __global__ void resetCount(){
   }
 }
 
+__global__ void getMinColSeam1 (int *in, int width, int *out){
+  extern __shared__ int s_mem[];
+  int i = (blockDim.x * blockIdx.x + threadIdx.x) * 2;
+  if (i < width)
+    s_mem[threadIdx.x] = i;
+  if (i + 1 < width)
+    s_mem[threadIdx.x + 1] = i + 1;
+  __syncthreads();
+
+  for (int stride = 1; stride < 2 * blockDim.x; stride *= 2){
+    if (threadIdx.x % stride == 0){
+      if (i + stride < width){
+        if (in[s_mem[threadIdx.x]] > in[s_mem[threadIdx.x + stride]]){
+          s_mem[threadIdx.x] = s_mem[threadIdx.x + stride];
+        }
+      }
+    }
+    __syncthreads();
+  }
+
+  if (threadIdx.x == 0){
+    out[blockIdx.x] = s_mem[0];
+  }
+  //int i = (blockDim.x * blockIdx.x + threadIdx.x) * 2;
+  //for (int stride = 1; stride < 2 * blockDim.x; stride *= 2){
+  //  if (threadIdx.x % stride == 0){
+  //    if (i + stride < width){
+  //      in[i] = min(in[i], in[i + stride]);
+  //    }
+  //  }
+  //  __syncthreads();
+  //}
+
+  //if (threadIdx.x == 0){
+  //  out[blockIdx.x] = in[blockDim.x * blockIdx.x * 2];
+  //}
+}
+
+__global__ void getMinColSeam2 (int *in, int width, volatile int *out){
+  extern __shared__ int s_mem[];
+  __shared__ int bi;
+  if (threadIdx.x == 0){
+    bi = atomicAdd(&bCount, 1);
+  }
+
+  __syncthreads();
+
+  int i = (blockDim.x * bi + threadIdx.x) * 2;
+  if (i < width)
+    s_mem[threadIdx.x] = i;
+  if (i + 1 < width)
+    s_mem[threadIdx.x + 1] = i + 1;
+  __syncthreads();
+
+  for (int stride = 1; stride < 2 * blockDim.x; stride *= 2){
+    if (threadIdx.x % stride == 0){
+      if (i + stride < width){
+        if (in[s_mem[threadIdx.x]] > in[s_mem[threadIdx.x + stride]]){
+          s_mem[threadIdx.x] = s_mem[threadIdx.x + stride];
+        }
+      }
+    }
+    __syncthreads();
+  }
+
+  //if (threadIdx.x == 0){
+  //  out[bi] = s_mem[0];
+  //}
+  if (threadIdx.x == 0){
+    out[bi] = s_mem[0];
+    if (bi > 0){
+      while(bCount1 < bi) {}
+      if (in[out[bi]] < in[out[0]])
+        out[0] = out[bi];
+    }
+    bCount1 += 1;
+  }
+}
+
+__global__ void getMinColSeam3 (int *in, int width, volatile int *out){
+  extern __shared__ int s_mem[];
+  __shared__ int bi;
+  if (threadIdx.x == 0){
+    bi = atomicAdd(&bCount, 1);
+  }
+
+  __syncthreads();
+
+  int i = (blockDim.x * bi + threadIdx.x) * 2;
+  if (i < width){
+    s_mem[threadIdx.x] = in[i];
+    s_mem[threadIdx.x + 2 * blockDim.x] = i;
+  }
+    s_mem[threadIdx.x] = in[i];
+  if (i + 1 < width)
+    s_mem[threadIdx.x + 1] = in[i+1];
+  __syncthreads();
+
+  for (int stride = 1; stride < 2 * blockDim.x; stride *= 2){
+    if (threadIdx.x % stride == 0){
+      if (i + stride < width){
+        if (in[s_mem[threadIdx.x]] > in[s_mem[threadIdx.x + stride]]){
+          s_mem[threadIdx.x] = s_mem[threadIdx.x + stride];
+        }
+      }
+    }
+    __syncthreads();
+  }
+
+  //if (threadIdx.x == 0){
+  //  out[bi] = s_mem[0];
+  //}
+  if (threadIdx.x == 0){
+    out[bi] = s_mem[0];
+    if (bi > 0){
+      while(bCount1 < bi) {}
+      if (in[out[bi]] < in[out[0]])
+        out[0] = out[bi];
+    }
+    bCount1 += 1;
+  }
+}
 __global__ void getMinColSeam (int *in, int width, volatile int *out){
   extern __shared__ int s_mem[]; //0 : blockDim.x*2-1 contain value of in array, blockDim.x*2 : blockDim.x*4-1 contain col idx
   __shared__ int bi;
@@ -499,8 +622,9 @@ void seamCarvingDevice(const uchar3 *in, int width, int height, uchar3 *out, int
 
   // find the least important seam
   // song song hoa van chua ra chinh xac hoan toan loi la 1.2xx
-  //resetCount<<<1, 1>>>();
+  resetCount<<<1, 1>>>();
   //getMinColSeam<<<minColGridSize, blockSize.x, blockSize.x * 4 * sizeof(int)>>>(d_leastImportantPixels, width, d_minCol);
+  //getMinColSeam2<<<minColGridSize, blockSize.x, blockSize.x * 2 * sizeof(int)>>>(d_leastImportantPixels, width, d_minCol);
   //CHECK(cudaGetLastError());
   //CHECK(cudaMemcpy(minCol, d_minCol, minColGridSize * sizeof(int), cudaMemcpyDeviceToHost));
   //int mc = minCol[0];
@@ -509,9 +633,19 @@ void seamCarvingDevice(const uchar3 *in, int width, int height, uchar3 *out, int
   //    mc = minCol[i];
   //  }
   //}
-  //getSeamAt(leastPixelsImportance, width, height, leastImportantSeam, mc);
-  getLeastImportantSeam(leastPixelsImportance, width, height, leastImportantSeam);
+  //printf("min col device1 : %d\n", leastPixelsImportance[mc]);
+  getMinColSeam2<<<minColGridSize, blockSize.x, blockSize.x * 2 * sizeof(int)>>>(d_leastImportantPixels, width, d_minCol);
+  int mc;
+  CHECK(cudaMemcpy(&mc, d_minCol, sizeof(int), cudaMemcpyDeviceToHost));
+  //printf("%d-%d\n", mc, leastPixelsImportance[mc]);
+  //CHECK(cudaMemcpy(minCol2, d_minCol2, minColGridSize * sizeof(int), cudaMemcpyDeviceToHost));
+  //printf("min col device2: %d\n", leastPixelsImportance[minCol2[0]]);
+  //free(minCol2);
 
+  // co loi la 0.012974 do co 2 cot trung nhau gia tri min
+
+  //getLeastImportantSeam(leastPixelsImportance, width, height, leastImportantSeam);
+  getSeamAt(leastPixelsImportance, width, height, leastImportantSeam, mc);
   // remove the least important seam
   // ham song song cho nay tang thoi gian chay so voi chay tuan tu
   CHECK(cudaMemcpy(d_seam, leastImportantSeam, height * sizeof(int), cudaMemcpyHostToDevice));
