@@ -369,6 +369,61 @@ __global__ void getLeastImportantPixelsKernel (int *in, int width, int row, int 
 
   }
 }
+
+__global__ void upTriangle (int *in, int width, int height, int yStart, int yStop, int baseWith, int *out){
+  int xStart = baseWith * blockIdx.x * blockDim.x + threadIdx.x * baseWith;
+  if (xStart < width){
+    int xStop = xStart + baseWith;
+
+    for (int y = yStart; y >= yStop; y--){
+      for (int x = xStart; x <= xStop; x++){
+        int idx = y * width + x;
+
+        if (x < width){
+          if (y == height - 1){
+            out[idx] = in[idx];
+          }
+          else{
+            int below = idx + width;
+            int left = max(below, below + x - 1);
+            int right = min(below + width - 1, below + x + 1);
+            
+            out[idx] = in[idx] + min(out[below], min(out[left], out[right]));
+          }
+        }
+
+      }
+      xStart += 1;
+      xStop -= 1;
+    }
+  }
+
+}
+
+__global__ void downTriangle (int *in, int width, int height, int yStart, int yStop, int baseWith, int *out){
+  int xStop = baseWith * (threadIdx.x + blockDim.x * blockIdx.x);
+  if (xStop < width){
+    int xStart = xStop - 1;
+
+    for (int y = yStart; y >= yStop; y--){
+      for (int x = xStart; x <= xStop; x++){
+        if (x >= 0 && x < width){
+          int idx = y * width + x;
+          
+          int below = idx + width;
+          int left = max(below, below + x - 1);
+          int right = min(below + width - 1, below + x + 1);
+            
+          out[idx] = in[idx] + min(out[below], min(out[left], out[right]));
+        }
+      }
+      xStart -= 1;
+      xStop += 1;
+    }
+  }
+}
+
+
 __device__ int bCount = 0;
 volatile __device__ int bCount1 = 0;
 
@@ -614,10 +669,30 @@ void seamCarvingDevice(const uchar3 *in, int width, int height, uchar3 *out, int
 
   // find the least important pixels
   CHECK(cudaMemcpy(d_leastImportantPixels + lastRowIdx, d_pixelsImportance + lastRowIdx, rowSize, cudaMemcpyDeviceToDevice));
-  for (int row = height - 2; row >= 0; row--){
-    getLeastImportantPixelsKernel<<<rowGridSize, blockSize.x>>>(d_pixelsImportance, width, row, d_leastImportantPixels);
-    CHECK(cudaGetLastError());
+  // for (int row = height - 2; row >= 0; row--){
+  //   getLeastImportantPixelsKernel<<<rowGridSize, blockSize.x>>>(d_pixelsImportance, width, row, d_leastImportantPixels);
+  //   CHECK(cudaGetLastError());
+  // }
+  int baseWith = 4;
+  int stripHeight = baseWith / 2 + 1;
+  int stripCount = (height - 1) / stripHeight + 1;
+
+  int gridSize1 = (width - 1) / (blockSize.x * baseWith) + 1;
+
+  for (int y = height - 1; y >= 0; y -= stripHeight){
+    int yStart = y;
+    int yStop = max(0, yStart - stripHeight + 1);
+    
+    upTriangle<<<gridSize1, blockSize.x>>>(d_pixelsImportance, width, height, yStart, yStop, baseWith, d_leastImportantPixels);
+
+    yStart = max(0, yStart - 1);
+    yStop = max(0, yStart - stripHeight + 1);
+
+    downTriangle<<<gridSize1, blockSize.x>>>(d_pixelsImportance, width, height, yStart, yStop, baseWith, d_leastImportantPixels);
   }
+
+
+
   CHECK(cudaMemcpy(leastPixelsImportance, d_leastImportantPixels, grayScaleSize, cudaMemcpyDeviceToHost));
 
   // find the least important seam
@@ -810,7 +885,7 @@ int main (int argc, char **argv){
   }
 
   // print device info
-  int codeVer = 181;
+  int codeVer = 180;
   printDeviceInfo(codeVer);
 
   // init out pointer
