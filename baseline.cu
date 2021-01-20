@@ -272,7 +272,7 @@ void getLeastImportantSeam (int *in, int width, int height, int *out){
     if (in[i] < in[minCol])
       minCol = i;
   }
-  printf("min col %d-%d\n", minCol, in[minCol]);
+  // printf("min col %d-%d\n", minCol, in[minCol]);
 
   getSeamAt(in, width, height, out, minCol);
 }
@@ -373,20 +373,21 @@ __global__ void getLeastImportantPixelsKernel (int *in, int width, int row, int 
 __global__ void upTriangle (int *in, int width, int height, int yStart, int yStop, int baseWith, int *out){
   int xStart = baseWith * blockIdx.x * blockDim.x + threadIdx.x * baseWith;
   if (xStart < width){
-    int xStop = xStart + baseWith;
+    int xStop = xStart + baseWith - 1;
 
     for (int y = yStart; y >= yStop; y--){
       for (int x = xStart; x <= xStop; x++){
         int idx = y * width + x;
 
         if (x < width){
+
           if (y == height - 1){
             out[idx] = in[idx];
           }
           else{
-            int below = idx + width;
-            int left = max(below, below + x - 1);
-            int right = min(below + width - 1, below + x + 1);
+            int below = (y + 1) * width + x;
+            int left = (y + 1) * width + max(0, x - 1);
+            int right = (y + 1) * width + min(width - 1, x + 1);
             
             out[idx] = in[idx] + min(out[below], min(out[left], out[right]));
           }
@@ -402,24 +403,23 @@ __global__ void upTriangle (int *in, int width, int height, int yStart, int ySto
 
 __global__ void downTriangle (int *in, int width, int height, int yStart, int yStop, int baseWith, int *out){
   int xStop = baseWith * (threadIdx.x + blockDim.x * blockIdx.x);
-  if (xStop < width){
-    int xStart = xStop - 1;
+  int xStart = xStop - 1;
 
-    for (int y = yStart; y >= yStop; y--){
-      for (int x = xStart; x <= xStop; x++){
-        if (x >= 0 && x < width){
-          int idx = y * width + x;
+  for (int y = yStart; y >= yStop; y--){
+    for (int x = xStart; x <= xStop; x++){
+      if (x >= 0 && x < width){
+
+        int idx = y * width + x;
+        
+        int below = idx + width;
+        int left = below - x + max(0, x - 1);
+        int right = below - x + min(width - 1, x + 1);
           
-          int below = idx + width;
-          int left = max(below, below + x - 1);
-          int right = min(below + width - 1, below + x + 1);
-            
-          out[idx] = in[idx] + min(out[below], min(out[left], out[right]));
-        }
+        out[idx] = in[idx] + min(out[below], min(out[left], out[right]));
       }
-      xStart -= 1;
-      xStop += 1;
     }
+    xStart -= 1;
+    xStop += 1;
   }
 }
 
@@ -673,9 +673,8 @@ void seamCarvingDevice(const uchar3 *in, int width, int height, uchar3 *out, int
   //   getLeastImportantPixelsKernel<<<rowGridSize, blockSize.x>>>(d_pixelsImportance, width, row, d_leastImportantPixels);
   //   CHECK(cudaGetLastError());
   // }
-  int baseWith = 4;
-  int stripHeight = baseWith / 2 + 1;
-  int stripCount = (height - 1) / stripHeight + 1;
+  int baseWith = 3;
+  int stripHeight = 2 + 1;
 
   int gridSize1 = (width - 1) / (blockSize.x * baseWith) + 1;
 
@@ -709,9 +708,9 @@ void seamCarvingDevice(const uchar3 *in, int width, int height, uchar3 *out, int
   //  }
   //}
   //printf("min col device1 : %d\n", leastPixelsImportance[mc]);
-  getMinColSeam2<<<minColGridSize, blockSize.x, blockSize.x * 2 * sizeof(int)>>>(d_leastImportantPixels, width, d_minCol);
-  int mc;
-  CHECK(cudaMemcpy(&mc, d_minCol, sizeof(int), cudaMemcpyDeviceToHost));
+  // getMinColSeam2<<<minColGridSize, blockSize.x, blockSize.x * 2 * sizeof(int)>>>(d_leastImportantPixels, width, d_minCol);
+  // int mc;
+  // CHECK(cudaMemcpy(&mc, d_minCol, sizeof(int), cudaMemcpyDeviceToHost));
   //printf("%d-%d\n", mc, leastPixelsImportance[mc]);
   //CHECK(cudaMemcpy(minCol2, d_minCol2, minColGridSize * sizeof(int), cudaMemcpyDeviceToHost));
   //printf("min col device2: %d\n", leastPixelsImportance[minCol2[0]]);
@@ -719,8 +718,8 @@ void seamCarvingDevice(const uchar3 *in, int width, int height, uchar3 *out, int
 
   // co loi la 0.012974 do co 2 cot trung nhau gia tri min
 
-  //getLeastImportantSeam(leastPixelsImportance, width, height, leastImportantSeam);
-  getSeamAt(leastPixelsImportance, width, height, leastImportantSeam, mc);
+  getLeastImportantSeam(leastPixelsImportance, width, height, leastImportantSeam);
+  // getSeamAt(leastPixelsImportance, width, height, leastImportantSeam, mc);
   // remove the least important seam
   // ham song song cho nay tang thoi gian chay so voi chay tuan tu
   CHECK(cudaMemcpy(d_seam, leastImportantSeam, height * sizeof(int), cudaMemcpyHostToDevice));
@@ -885,7 +884,7 @@ int main (int argc, char **argv){
   }
 
   // print device info
-  int codeVer = 180;
+  int codeVer = 191;
   printDeviceInfo(codeVer);
 
   // init out pointer
