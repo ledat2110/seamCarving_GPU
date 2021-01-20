@@ -410,11 +410,10 @@ __global__ void downTriangle (int *in, int width, int height, int yStart, int yS
       if (x >= 0 && x < width){
 
         int idx = y * width + x;
-        
-        int below = idx + width;
-        int left = below - x + max(0, x - 1);
-        int right = below - x + min(width - 1, x + 1);
-          
+        int below = (y + 1) * width + x;
+        int left = (y + 1) * width + max(0, x - 1);
+        int right = (y + 1) * width + min(width - 1, x + 1);
+         
         out[idx] = in[idx] + min(out[below], min(out[left], out[right]));
       }
     }
@@ -625,7 +624,7 @@ __global__ void removeSeamKernel (uchar3 *in, int width, int height, uchar3 *out
   }
 }
 
-void seamCarvingDevice(const uchar3 *in, int width, int height, uchar3 *out, int *xFilter, int *yFilter, int filterWidth, dim3 blockSize){
+void seamCarvingDevice(const uchar3 *in, int width, int height, uchar3 *out, int *xFilter, int *yFilter, int filterWidth, dim3 blockSize, int baseWith){
   // prepare some values
   int newWidth = width - 1;
   int lastRowIdx = (height - 1) * width;
@@ -668,13 +667,15 @@ void seamCarvingDevice(const uchar3 *in, int width, int height, uchar3 *out, int
   CHECK(cudaGetLastError());
 
   // find the least important pixels
-  CHECK(cudaMemcpy(d_leastImportantPixels + lastRowIdx, d_pixelsImportance + lastRowIdx, rowSize, cudaMemcpyDeviceToDevice));
-  // for (int row = height - 2; row >= 0; row--){
-  //   getLeastImportantPixelsKernel<<<rowGridSize, blockSize.x>>>(d_pixelsImportance, width, row, d_leastImportantPixels);
-  //   CHECK(cudaGetLastError());
-  // }
-  int baseWith = 3;
-  int stripHeight = 2 + 1;
+  //CHECK(cudaMemcpy(d_leastImportantPixels + lastRowIdx, d_pixelsImportance + lastRowIdx, rowSize, cudaMemcpyDeviceToDevice));
+  //for (int row = height - 2; row >= 0; row--){
+  //  getLeastImportantPixelsKernel<<<rowGridSize, blockSize.x>>>(d_pixelsImportance, width, row, d_leastImportantPixels);
+  //  CHECK(cudaGetLastError());
+  //}
+  //CHECK(cudaMemcpy(leastPixelsImportance, d_leastImportantPixels, grayScaleSize, cudaMemcpyDeviceToHost));
+  //writeMatrixTxt(leastPixelsImportance, width, height, "least1.txt");
+  
+  int stripHeight = baseWith % 2 == 0 ? baseWith / 2 + 1 : (baseWith + 1) / 2 + 1;
 
   int gridSize1 = (width - 1) / (blockSize.x * baseWith) + 1;
 
@@ -687,13 +688,12 @@ void seamCarvingDevice(const uchar3 *in, int width, int height, uchar3 *out, int
     yStart = max(0, yStart - 1);
     yStop = max(0, yStart - stripHeight + 1);
 
-    downTriangle<<<gridSize1, blockSize.x>>>(d_pixelsImportance, width, height, yStart, yStop, baseWith, d_leastImportantPixels);
+    downTriangle<<<gridSize1 + 1, blockSize.x>>>(d_pixelsImportance, width, height, yStart, yStop, baseWith, d_leastImportantPixels);
   }
 
 
 
   CHECK(cudaMemcpy(leastPixelsImportance, d_leastImportantPixels, grayScaleSize, cudaMemcpyDeviceToHost));
-
   // find the least important seam
   // song song hoa van chua ra chinh xac hoan toan loi la 1.2xx
   resetCount<<<1, 1>>>();
@@ -740,7 +740,7 @@ void seamCarvingDevice(const uchar3 *in, int width, int height, uchar3 *out, int
   free(leastImportantSeam);
 }
 
-void seamCarving(const uchar3 *in, int width, int height, uchar3 *out, int newWidth, int *xFilter, int *yFilter, int filterWidth, bool usingDevice=false, dim3 blockSize=dim3(1, 1)){
+void seamCarving(const uchar3 *in, int width, int height, uchar3 *out, int newWidth, int *xFilter, int *yFilter, int filterWidth, bool usingDevice=false, dim3 blockSize=dim3(1, 1), int baseWith = 3){
   GpuTimer timer;
   timer.Start();
 
@@ -803,7 +803,7 @@ void seamCarving(const uchar3 *in, int width, int height, uchar3 *out, int newWi
       dst = (uchar3 *)realloc(dst, (w-1) * height * sizeof(uchar3));
 
       // seamCarving the picture
-      seamCarvingDevice(src, w, height, dst, xFilter, yFilter, filterWidth, blockSize);
+      seamCarvingDevice(src, w, height, dst, xFilter, yFilter, filterWidth, blockSize, baseWith);
 
       // swap src and dst
       uchar3 * temp = src;
@@ -866,12 +866,13 @@ char *concatStr(const char *s1, const char *s2){
 }
 
 int main (int argc, char **argv){
-  if (argc != 3 && argc != 5){
+  if (argc != 4 && argc != 6){
     printf("The number of arguments is invalid\n");
     return EXIT_FAILURE;
   }
 
   int newWidth = atoi(argv[2]);
+  int baseWith = atoi(argv[3]);
 
   // Read input image file
   int width, height;
@@ -909,7 +910,7 @@ int main (int argc, char **argv){
   }
 
   // Seam carving using device
-  seamCarving(inPixels, width, height, outPixels, newWidth, xFilter, yFilter, filterWidth, true, blockSize);
+  seamCarving(inPixels, width, height, outPixels, newWidth, xFilter, yFilter, filterWidth, true, blockSize, baseWith);
   printError(correctOutPixels, outPixels, newWidth, height);
 
   // Write results to files
